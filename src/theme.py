@@ -2,6 +2,9 @@ COLORS = dict(primary='#00C878', primary_hover='#00B46B', background='#FAFAFA', 
 
 
 WINDOW_CORNER_RADIUS = 10
+MESSAGE_WHEEL_STEP = 40
+MESSAGE_WHEEL_DURATION = 160
+MESSAGE_WHEEL_MAX_AHEAD = 120
 
 
 def stylesheet():

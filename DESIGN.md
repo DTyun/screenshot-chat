@@ -80,6 +80,7 @@ ConfirmDelete 为应用 QDialog，说明原图和记录一起删除，默认聚�
 ### Iconography
 assets/scissors.png 为 imagegen 生成的绿色方底白剪刀 logo，派生包含 16–256px 的多尺寸 scissors.ico；窗口、托盘与头像统一引用。侧栏聊天图标使用代码绘制的绿色气泡，其他工具配中文提示及 accessibleName。
 ### Motion
+消息列表滚轮使用 MessageHistory.wheelEvent 统一处理：每 120 角度单位移动 40 逻辑像素，160ms OutCubic 过渡，目标最多领先当前位置 120px。高精度滚轮按比例累积，触摸板 pixelDelta 原样使用；滚动条和程序定位优先，用户反向立即反向，不保留长惯性。参数由 src/theme.py 的 MESSAGE_WHEEL_* 统一维护。
 无装饰动画；截图前延迟 220ms 等待窗口隐藏完成。
 按用户最新要求，点击截图工具栏 ✓ / Enter 确定后，复制到剪贴板并打开当前聊天，将截图插入统一输入框；保留已有草稿，发送前可继续编辑。取消截图恢复原先显隐状态，不激活隐藏的窗口。
 框选松开后出现 `src/capture.py::SelectionOverlay` 自有工具栏，矩形/圆形/箭头/画笔/文字/马赛克；红绿蓝黄为标注色，3/5/8 为逻辑像素线宽。Ctrl+Z 撤销，Ctrl+S 保存，✓/Enter 完成并放入聊天输入框，Esc/× 取消。只有完成后才写剪贴板。

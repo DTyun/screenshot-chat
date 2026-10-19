@@ -1,7 +1,8 @@
 """Selectable text in virtualized, read-only chat bubbles."""
-from PySide6.QtCore import Qt, QPointF, QTimer
+from PySide6.QtCore import Qt, QPointF, QTimer, QVariantAnimation, QEasingCurve
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QListWidget
+from .theme import MESSAGE_WHEEL_STEP, MESSAGE_WHEEL_DURATION, MESSAGE_WHEEL_MAX_AHEAD
 
 
 class MessageHistory(QListWidget):
@@ -14,17 +15,69 @@ class MessageHistory(QListWidget):
         self.selection_scroll = QTimer(self)
         self.selection_scroll.setInterval(35)
         self.selection_scroll.timeout.connect(self.auto_scroll_selection)
+        self.wheel_target = None
+        self.animating_scroll = False
+        self.wheel_animation = QVariantAnimation(self)
+        self.wheel_animation.setDuration(MESSAGE_WHEEL_DURATION)
+        self.wheel_animation.setEasingCurve(QEasingCurve.OutCubic)
+        self.wheel_animation.valueChanged.connect(self.animate_scroll)
+        self.verticalScrollBar().setSingleStep(20)
+        self.verticalScrollBar().valueChanged.connect(self.external_scroll)
+        self.verticalScrollBar().rangeChanged.connect(lambda *args: self.stop_wheel_scroll())
+        self.verticalScrollBar().sliderPressed.connect(self.stop_wheel_scroll)
         self.currentItemChanged.connect(lambda current,previous: self.clear_text_selection())
         self.model().modelReset.connect(self.clear_text_selection)
         self.model().rowsRemoved.connect(lambda *args: self.clear_text_selection())
         self.setMouseTracking(True)
 
     def clear_text_selection(self):
+        self.stop_wheel_scroll()
         self.text_message_id = None
         self.text_anchor = self.text_position = 0
         self.dragging_text = False
         self.selection_scroll.stop()
         self.viewport().update()
+
+    def stop_wheel_scroll(self):
+        self.wheel_animation.stop()
+        self.wheel_target = None
+
+    def external_scroll(self,value):
+        if not self.animating_scroll:
+            self.stop_wheel_scroll()
+
+    def animate_scroll(self,value):
+        self.animating_scroll = True
+        try:
+            self.verticalScrollBar().setValue(round(float(value)))
+        finally:
+            self.animating_scroll = False
+
+    def wheelEvent(self,event):
+        bar = self.verticalScrollBar()
+        if event.pixelDelta().y():
+            # Touchpads already deliver smooth pixel distances; do not multiply them.
+            self.stop_wheel_scroll()
+            bar.setValue(bar.value()-event.pixelDelta().y())
+            event.accept()
+            return
+        if not event.angleDelta().y():
+            event.ignore()
+            return
+        current = bar.value()
+        distance = -event.angleDelta().y()/120*MESSAGE_WHEEL_STEP
+        target = self.wheel_target if self.wheel_target is not None else float(current)
+        if (target-current)*distance<0:
+            target = float(current)
+        target = max(bar.minimum(),min(bar.maximum(),target+distance))
+        # Do not queue a long inertial tail when the wheel is spun repeatedly.
+        target = max(current-MESSAGE_WHEEL_MAX_AHEAD,min(current+MESSAGE_WHEEL_MAX_AHEAD,target))
+        self.wheel_animation.stop()
+        self.wheel_target = target
+        self.wheel_animation.setStartValue(float(current))
+        self.wheel_animation.setEndValue(float(target))
+        self.wheel_animation.start()
+        event.accept()
 
     def text_layout(self,item):
         if item and item.data(Qt.UserRole)['text']:
@@ -69,6 +122,7 @@ class MessageHistory(QListWidget):
                 self.viewport().update()
 
     def mousePressEvent(self,event):
+        self.stop_wheel_scroll()
         item,layout = self.text_at(event.position().toPoint())
         if event.button()==Qt.LeftButton and layout:
             self.setCurrentItem(item)
@@ -130,6 +184,7 @@ class MessageHistory(QListWidget):
         super().mouseDoubleClickEvent(event)
 
     def keyPressEvent(self,event):
+        self.stop_wheel_scroll()
         item = self.currentItem()
         layout = self.text_layout(item)
         if layout and event.key()==Qt.Key_A and event.modifiers() & Qt.ControlModifier:
@@ -151,3 +206,8 @@ class MessageHistory(QListWidget):
             event.accept()
             return
         super().keyPressEvent(event)
+
+    def hideEvent(self,event):
+        self.stop_wheel_scroll()
+        self.selection_scroll.stop()
+        super().hideEvent(event)

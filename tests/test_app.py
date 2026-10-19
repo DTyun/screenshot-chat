@@ -950,3 +950,94 @@ def test_long_message_selection_scrolls_at_viewport_edge(app,tmp_path):
     w.tray.hide()
     w.quitting=True
     w.close()
+
+
+def send_history_wheel(window,angle=-120,pixels=0):
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtCore import QPointF
+    viewport=window.history.viewport()
+    local=viewport.rect().center()
+    event=QWheelEvent(QPointF(local),QPointF(viewport.mapToGlobal(local)),QPoint(0,pixels),
+                      QPoint(0,angle),Qt.NoButton,Qt.NoModifier,Qt.NoScrollPhase,False)
+    QApplication.sendEvent(viewport,event)
+    return event
+
+
+def scrollable_chat(app,tmp_path,text):
+    w=MainWindow(Store(tmp_path),FakeHotkey(),FakeStartup())
+    for i in range(24):w.store.save_text(f'{i}: '+text)
+    w.reload_latest()
+    w.show()
+    app.processEvents()
+    bar=w.history.verticalScrollBar()
+    bar.setValue(bar.maximum()//2)
+    return w
+
+
+@pytest.mark.parametrize('text',['短消息','\n'.join('长消息的第'+str(i)+'行' for i in range(50))])
+def test_wheel_has_small_fixed_distance_independent_of_message_height(app,tmp_path,text):
+    w=scrollable_chat(app,tmp_path,text)
+    bar=w.history.verticalScrollBar()
+    before=bar.value()
+    assert send_history_wheel(w).isAccepted()
+    assert bar.value()==before  # No instantaneous row-height jump.
+    QTest.qWait(240)
+    assert bar.value()==before+40
+    w.tray.hide()
+    w.quitting=True
+    w.close()
+
+
+def test_wheel_burst_is_bounded_and_reverses_immediately(app,tmp_path):
+    w=scrollable_chat(app,tmp_path,'消息文字')
+    bar=w.history.verticalScrollBar()
+    before=bar.value()
+    for _ in range(12):send_history_wheel(w)
+    assert w.history.wheel_target<=before+120
+    QTest.qWait(240)
+    assert bar.value()==before+120
+    send_history_wheel(w)
+    QTest.qWait(45)
+    turn=bar.value()
+    send_history_wheel(w,angle=120)
+    assert w.history.wheel_target==turn-40
+    QTest.qWait(240)
+    assert bar.value()==turn-40
+    QTest.qWait(200)
+    assert bar.value()==turn-40
+    w.tray.hide()
+    w.quitting=True
+    w.close()
+
+
+def test_touchpad_pixels_and_high_resolution_wheel_are_not_amplified(app,tmp_path):
+    w=scrollable_chat(app,tmp_path,'消息文字')
+    bar=w.history.verticalScrollBar()
+    before=bar.value()
+    send_history_wheel(w,pixels=-7)
+    assert bar.value()==before+7
+    for _ in range(8):send_history_wheel(w,angle=-15)
+    QTest.qWait(240)
+    assert bar.value()==before+47
+    w.tray.hide()
+    w.quitting=True
+    w.close()
+
+
+def test_direct_scroll_and_chat_switch_cancel_wheel_animation(app,tmp_path):
+    w=scrollable_chat(app,tmp_path,'消息文字')
+    bar=w.history.verticalScrollBar()
+    send_history_wheel(w)
+    QTest.qWait(30)
+    bar.setValue(100)
+    QTest.qWait(240)
+    assert bar.value()==100
+    send_history_wheel(w)
+    other=w.store.create_conversation('新聊天')
+    w.refresh_conversations()
+    w.chats.setCurrentRow(1)
+    QTest.qWait(240)
+    assert w.chat_id==other and bar.value()==0
+    w.tray.hide()
+    w.quitting=True
+    w.close()
