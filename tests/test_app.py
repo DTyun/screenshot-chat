@@ -805,3 +805,148 @@ def test_delete_chat_confirmation_cancel_and_other_draft(app, tmp_path, image, m
     w.tray.hide()
     w.quitting=True
     w.close()
+
+
+def history_text_point(window,item,text_offset):
+    from PySide6.QtGui import QTextCursor
+    doc,rect=window.history.text_layout(item)
+    text=item.data(Qt.UserRole)['text']
+    cursor=QTextCursor(doc)
+    cursor.setPosition(len(text[:text_offset].encode('utf-16-le'))//2)
+    layout=cursor.block().layout()
+    line=layout.lineForTextPosition(cursor.positionInBlock())
+    x=line.cursorToX(cursor.positionInBlock())[0]
+    return QPoint(round(rect.x()+10+layout.position().x()+x),round(rect.y()+10+layout.position().y()+line.y()+line.height()/2))
+
+
+@pytest.mark.parametrize('with_image,reverse',[(False,False),(False,True),(True,False),(True,True)])
+def test_partial_message_drag_and_copy(app,tmp_path,image,with_image,reverse):
+    original='开始文字：\n目标🙂片段\n末尾保留文字'
+    expected='标🙂片段\n末尾'
+    w=MainWindow(Store(tmp_path),FakeHotkey(),FakeStartup())
+    if with_image:
+        record=w.store.save(image,original)
+    else:
+        record=w.store.save_text(original)
+    w.reload_latest()
+    w.show()
+    w.activateWindow()
+    app.processEvents()
+    item=w.history.item(0)
+    start=original.index(expected)
+    points=[history_text_point(w,item,start),history_text_point(w,item,start+len(expected))]
+    if reverse: points.reverse()
+    QTest.mousePress(w.history.viewport(),Qt.LeftButton,pos=points[0])
+    QTest.mouseMove(w.history.viewport(),points[1])
+    QTest.mouseRelease(w.history.viewport(),Qt.LeftButton,pos=points[1])
+    assert w.history.selected_text()==expected
+    QTest.keyClick(w.history,Qt.Key_C,Qt.ControlModifier)
+    assert app.clipboard().text()==expected
+    assert w.store.page()[0]['text']==original
+    if with_image:
+        w.copy_image(item)
+        assert app.clipboard().image()==image
+    w.tray.hide()
+    w.quitting=True
+    w.close()
+
+
+def test_selected_text_context_menu_and_chat_switch(app,tmp_path,monkeypatch):
+    from PySide6.QtWidgets import QMenu
+    w=MainWindow(Store(tmp_path),FakeHotkey(),FakeStartup())
+    w.store.save_text('prefix selected suffix')
+    other=w.store.create_conversation('其他聊天')
+    w.reload_latest()
+    w.refresh_conversations()
+    w.show()
+    app.processEvents()
+    item=w.history.item(0)
+    a,b=history_text_point(w,item,7),history_text_point(w,item,15)
+    QTest.mousePress(w.history.viewport(),Qt.LeftButton,pos=a)
+    QTest.mouseRelease(w.history.viewport(),Qt.LeftButton,pos=b)
+    def choose(menu,*args):
+        names=[action.text() for action in menu.actions()]
+        assert '复制所选文字' in names and '复制全文' in names
+        next(a for a in menu.actions() if a.text()=='复制所选文字').trigger()
+    class TestMenu(QMenu):
+        def exec(self,*args):
+            return choose(self,*args)
+    monkeypatch.setattr('src.ui.QMenu',TestMenu)
+    w.context_menu(a)
+    assert app.clipboard().text()=='selected'
+    w.chats.setCurrentRow(1)
+    assert w.chat_id==other and w.history.selected_text()==''
+    w.chats.setCurrentRow(0)
+    w.copy(w.history.item(0))
+    assert app.clipboard().text()=='prefix selected suffix'
+    w.tray.hide()
+    w.quitting=True
+    w.close()
+
+
+def test_double_click_word_and_ctrl_a_in_history(app,tmp_path):
+    original='prefix selected suffix'
+    w=MainWindow(Store(tmp_path),FakeHotkey(),FakeStartup())
+    w.store.save_text(original)
+    w.reload_latest()
+    w.show()
+    w.activateWindow()
+    app.processEvents()
+    p=history_text_point(w,w.history.item(0),10)
+    QTest.mouseClick(w.history.viewport(),Qt.LeftButton,pos=p)
+    QTest.mouseDClick(w.history.viewport(),Qt.LeftButton,pos=p)
+    assert w.history.selected_text()=='selected'
+    QTest.keyClick(w.history,Qt.Key_A,Qt.ControlModifier)
+    QTest.keyClick(w.history,Qt.Key_C,Qt.ControlModifier)
+    assert app.clipboard().text()==original
+    QTest.keyClick(w.history,Qt.Key_Backspace)
+    assert w.store.page()[0]['text']==original
+    w.reload_latest()
+    assert w.history.selected_text()==''
+    w.tray.hide()
+    w.quitting=True
+    w.close()
+
+
+def test_partial_copy_across_soft_wrapped_lines(app,tmp_path):
+    text='开头 '+('资料记录'*8)+'需要单独复制的内容🙂'+('结尾文字'*5)
+    expected=text[5:50]
+    w=MainWindow(Store(tmp_path),FakeHotkey(),FakeStartup())
+    w.store.save_text(text)
+    w.reload_latest()
+    w.show()
+    app.processEvents()
+    item=w.history.item(0)
+    a,b=history_text_point(w,item,5),history_text_point(w,item,50)
+    assert b.y()>a.y()
+    QTest.mousePress(w.history.viewport(),Qt.LeftButton,pos=a)
+    QTest.mouseMove(w.history.viewport(),b)
+    QTest.mouseRelease(w.history.viewport(),Qt.LeftButton,pos=b)
+    w.copy(item)
+    assert app.clipboard().text()==expected
+    assert '\n' not in app.clipboard().text()
+    w.tray.hide()
+    w.quitting=True
+    w.close()
+
+
+def test_long_message_selection_scrolls_at_viewport_edge(app,tmp_path):
+    w=MainWindow(Store(tmp_path),FakeHotkey(),FakeStartup())
+    w.store.save_text('\n'.join(f'第{i}行文字' for i in range(120)))
+    w.reload_latest()
+    w.show()
+    app.processEvents()
+    w.history.verticalScrollBar().setValue(0)
+    item=w.history.item(0)
+    a=history_text_point(w,item,0)
+    below=QPoint(a.x()+30,w.history.viewport().height()+15)
+    QTest.mousePress(w.history.viewport(),Qt.LeftButton,pos=a)
+    QTest.mouseMove(w.history.viewport(),below)
+    QTest.qWait(160)
+    assert w.history.verticalScrollBar().value()>0
+    assert w.history.selected_text().startswith('第0行文字\n')
+    QTest.mouseRelease(w.history.viewport(),Qt.LeftButton,pos=below)
+    assert not w.history.selection_scroll.isActive()
+    w.tray.hide()
+    w.quitting=True
+    w.close()

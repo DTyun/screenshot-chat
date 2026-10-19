@@ -6,7 +6,7 @@ import ctypes
 from ctypes import wintypes
 
 from PySide6.QtCore import Qt, QSize, QRect, QRectF, QPointF, QTimer, QEvent
-from PySide6.QtGui import QPixmap, QIcon, QImage, QPainter, QColor, QKeySequence, QShortcut, QDesktopServices, QPen, QTextDocument, QFont, QPainterPath, QRegion
+from PySide6.QtGui import QPixmap, QIcon, QImage, QPainter, QColor, QKeySequence, QShortcut, QDesktopServices, QPen, QTextDocument, QFont, QPainterPath, QRegion, QTextCursor, QAbstractTextDocumentLayout
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton,
     QVBoxLayout, QHBoxLayout, QListWidget, QListWidgetItem, QAbstractItemView,
@@ -17,6 +17,7 @@ from .platform_win import Startup
 from .theme import COLORS, stylesheet, WINDOW_CORNER_RADIUS
 from .composer import ChatEditor
 from .version import APP_NAME, APP_VERSION, AUTHOR, AUTHOR_URL, REPOSITORY_URL
+from .history import MessageHistory
 
 
 def asset(name):
@@ -152,6 +153,13 @@ class MessageDelegate(QStyledItemDelegate):
         doc.setTextWidth(max(24, doc.idealWidth()))
         return doc
 
+    def text_layout(self,message,rect):
+        doc = self.document(message['text'],rect.width())
+        image_height = self.dimensions(message,rect.width()).height() if message['kind']=='image' else 0
+        bubble = QRect(rect.right()-54-24-round(doc.size().width()),rect.top()+34+image_height,
+                       round(doc.size().width())+20,round(doc.size().height())+20)
+        return doc,bubble
+
     def paint(self, painter, option, index):
         m = index.data(Qt.UserRole)
         size = self.dimensions(m, option.rect.width()) if m['kind'] == 'image' else QSize()
@@ -174,15 +182,24 @@ class MessageDelegate(QStyledItemDelegate):
             else:
                 painter.drawText(image_rect, Qt.AlignCenter, '图片文件已移走')
         if m['text']:
-            doc = self.document(m['text'], r.width())
-            text_rect = QRect(avatar_rect.left()-24-round(doc.size().width()), r.top()+34+size.height(), round(doc.size().width())+20, round(doc.size().height())+20)
+            doc,text_rect = self.text_layout(m,r)
             painter.setPen(Qt.NoPen)
             painter.setBrush(QColor('#A9EA7A'))
             painter.drawRoundedRect(text_rect,6,6)
             painter.save()
             painter.translate(text_rect.x()+10,text_rect.y()+10)
             painter.setPen(QColor(COLORS['text']))
-            doc.drawContents(painter)
+            context = QAbstractTextDocumentLayout.PaintContext()
+            history = self.parent()
+            if history.text_message_id==m['id'] and history.text_anchor!=history.text_position:
+                selected = QAbstractTextDocumentLayout.Selection()
+                selected.cursor = QTextCursor(doc)
+                selected.cursor.setPosition(history.text_anchor)
+                selected.cursor.setPosition(history.text_position,QTextCursor.KeepAnchor)
+                selected.format.setBackground(QColor('#B5D9FF'))
+                selected.format.setForeground(QColor(COLORS['text']))
+                context.selections = [selected]
+            doc.documentLayout().draw(painter,context)
             painter.restore()
             image_rect = image_rect.united(text_rect) if m['kind']=='image' else text_rect
         if option.state & QStyle.State_HasFocus:
@@ -582,7 +599,7 @@ class MainWindow(QMainWindow):
         main.addWidget(header)
         self.older_button = button('查看更早的图片', self.load_older)
         main.addWidget(self.older_button, alignment=Qt.AlignHCenter)
-        self.history = QListWidget()
+        self.history = MessageHistory()
         self.history.setAccessibleName('图片对话记录；右键复制或删除')
         self.history.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.history.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
@@ -912,7 +929,13 @@ class MainWindow(QMainWindow):
         self.history.setCurrentItem(item)
         menu = QMenu(self)
         message = item.data(Qt.UserRole)
-        menu.addAction('复制图片' if message['kind']=='image' else '复制文字', lambda: self.copy(item))
+        selected = self.history.selected_text(item)
+        if selected:
+            menu.addAction('复制所选文字',lambda: QApplication.clipboard().setText(selected))
+        if message['kind']=='image':
+            menu.addAction('复制图片',lambda: self.copy_image(item))
+        else:
+            menu.addAction('复制全文' if selected else '复制文字',lambda: QApplication.clipboard().setText(message['text']))
         if message['kind']=='image' and message['text']:
             menu.addAction('复制文字', lambda: QApplication.clipboard().setText(message['text']))
         menu.addAction('删除消息', lambda: self.delete(item))
@@ -921,10 +944,18 @@ class MainWindow(QMainWindow):
     def copy(self, item):
         if not item:
             return
+        selected = self.history.selected_text(item)
+        if selected:
+            QApplication.clipboard().setText(selected)
+            self.notify('所选文字已复制')
+            return
         if item.data(Qt.UserRole)['kind'] == 'text':
             QApplication.clipboard().setText(item.data(Qt.UserRole)['text'])
             self.notify('文字已复制')
             return
+        self.copy_image(item)
+
+    def copy_image(self,item):
         image = QImage(str(self.store.images / item.data(Qt.UserRole)['filename']))
         if image.isNull():
             self.notify('图片读取失败：文件可能已被移动或删除')

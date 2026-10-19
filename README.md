@@ -2,7 +2,7 @@
 
 微信风格的 Windows 本地截图、文字与图片记录工具。无需账号，聊天与图片保存在本机。
 
-**版本 1.0.0 · Windows 10/11 x64 · MIT**
+**版本 1.0.1 · Windows 10/11 x64 · MIT**
 
 [下载最新版本](https://github.com/DTyun/screenshot-chat/releases/latest) · [作者 X：@yumi202607](https://x.com/yumi202607) · [更新记录](CHANGELOG.md)
 
@@ -10,7 +10,7 @@
 
 ## 下载与运行
 
-在 [Releases](https://github.com/DTyun/screenshot-chat/releases/latest) 下载 `ScreenshotChat-v1.0.0-win64.zip`，解压后双击 **截图聊天.exe**，无需安装 Python。也可下载单文件 EXE；许可材料同时嵌入程序。
+在 [Releases](https://github.com/DTyun/screenshot-chat/releases/latest) 下载 `ScreenshotChat-v1.0.1-win64.zip`，解压后双击 **截图聊天.exe**，无需安装 Python。也可下载单文件 EXE；许可材料同时嵌入程序。
 
 升级前先从托盘退出旧版。历史记录默认保存在用户目录，替换程序不会删除聊天。
 
@@ -22,6 +22,7 @@
 - 多个本地聊天，可新建、重命名、确认删除；按文字、图片、日期查找并定位。
 - 图片双击用内置只读窗口查看，支持缩放和拖动。
 - 图片和文字右键复制、删除；删除聊天时确认后同时删除文字、原图和缩略图。
+- 已发送文字及图片备注可拖选部分内容，Ctrl+C 或右键复制所选文字，也可复制全文；双击文字选词。
 - 托盘常驻、单实例、开机启动勾选、窗口置顶、最大化与圆角。
 - 自选缓存文件夹，默认迁移原记录，也可不迁移。
 - “关于软件”显示版本、X 账号链接和开源信息。
