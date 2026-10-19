@@ -18,6 +18,7 @@ from .theme import COLORS, stylesheet, WINDOW_CORNER_RADIUS
 from .composer import ChatEditor
 from .version import APP_NAME, APP_VERSION, AUTHOR, AUTHOR_URL, REPOSITORY_URL
 from .history import MessageHistory
+from .app_logging import logger,active_log_path,configure_logging
 
 
 def asset(name):
@@ -73,6 +74,11 @@ def rail_icon(symbol):
             p.drawLine(QPointF(3,y),QPointF(x-2,y))
             p.drawLine(QPointF(x+2,y),QPointF(17,y))
             p.drawEllipse(QPointF(x,y),2,2)
+    elif symbol == 'logs':
+        p.drawRoundedRect(QRectF(4,2,12,16),2,2)
+        p.drawLine(7,6,13,6)
+        p.drawLine(7,10,13,10)
+        p.drawLine(7,14,11,14)
     else:
         p.drawLine(15,5,5,15)
         p.drawLine(5,8,5,15)
@@ -431,8 +437,10 @@ class SettingsDialog(QDialog):
             self.window.hotkey_text = text
             self.window.update_hotkey_labels()
             self.window.notify('设置已保存')
+            logger.info('设置已保存；快捷键=%s',text)
             self.accept()
         except (ValueError, OSError) as exc:
+            logger.exception('保存设置失败')
             self.error.setText(str(exc))
 
 
@@ -445,6 +453,7 @@ class MainWindow(QMainWindow):
         self.drafts = {}
         self.cache_drafts = {}
         self.image_viewer = None
+        self.log_viewer = None
         self.hotkey_text = store.settings().get('hotkey', 'Ctrl+Alt+A')
         self.pending = None
         self.capture_session = None
@@ -471,7 +480,9 @@ class MainWindow(QMainWindow):
         self.hotkey.events.triggered.connect(self.capture)
         try:
             self.hotkey.set(self.hotkey_text)
+            logger.info('截图快捷键已注册：%s',self.hotkey_text)
         except ValueError as exc:
+            logger.warning('截图快捷键注册失败：%s',exc)
             self.notify(str(exc) + '；点击设置修改')
         self.paste_shortcut = QShortcut(QKeySequence.Paste, self)
         self.paste_shortcut.activated.connect(self.paste)
@@ -511,6 +522,12 @@ class MainWindow(QMainWindow):
         conversation_button.setIconSize(QSize(28,28))
         nav.addWidget(conversation_button)
         nav.addStretch()
+        self.log_button = button('',self.show_logs,'railButton','查看日志')
+        self.log_button.setIcon(rail_icon('logs'))
+        self.log_button.setIconSize(QSize(20,20))
+        self.log_button.setFixedSize(44,36)
+        nav.addWidget(self.log_button,alignment=Qt.AlignHCenter)
+        nav.addSpacing(12)
         rail_footer = QWidget()
         rail_footer.setObjectName('railFooter')
         rail_footer.setFixedHeight(100)
@@ -660,6 +677,16 @@ class MainWindow(QMainWindow):
 
     def about(self):
         AboutDialog(self).exec()
+
+    def show_logs(self):
+        from .log_viewer import LogViewer
+        if self.log_viewer is None:
+            self.log_viewer = LogViewer(self,lambda: active_log_path(self.store.root))
+        else:
+            self.log_viewer.refresh()
+        self.log_viewer.show()
+        self.log_viewer.raise_()
+        self.log_viewer.activateWindow()
 
     def refresh_conversations(self):
         self.chats.blockSignals(True)
@@ -872,9 +899,11 @@ class MainWindow(QMainWindow):
             else:
                 message = self.store.save_text(text, self.chat_id)
         except (OSError, ValueError, sqlite3.Error) as exc:
+            logger.exception('保存消息失败；聊天编号=%s',self.chat_id)
             self.notify('发送失败：' + str(exc))
             self.send_button.setEnabled(True)
             return
+        logger.info('消息已保存；聊天编号=%s；图片数=%s',self.chat_id,len(self.text_editor.images()))
         self.text_editor.reset()
         self.update_send_state()
         self.reload_latest()
@@ -887,6 +916,7 @@ class MainWindow(QMainWindow):
         if self.capture_busy or self.capture_session or QApplication.activeModalWidget():
             return
         self.was_visible = self.isVisible() and not self.isMinimized()
+        logger.info('开始截图')
         self.capture_busy = True
         self.hide()
         QTimer.singleShot(220, self.begin_capture)
@@ -904,6 +934,7 @@ class MainWindow(QMainWindow):
             self.capture_session = None
 
     def captured(self, image):
+        logger.info('截图完成；尺寸=%sx%s',image.width(),image.height())
         self.release_capture()
         QApplication.clipboard().setImage(image)
         self.restore()
@@ -919,6 +950,7 @@ class MainWindow(QMainWindow):
                 self.setAttribute(Qt.WA_ShowWithoutActivating, False)
 
     def capture_cancelled(self):
+        logger.info('截图已取消')
         self.release_capture()
         self.restore_after_capture()
 
@@ -1029,6 +1061,11 @@ class MainWindow(QMainWindow):
         previous_chat_id = self.chat_id
         self.store.db.close()
         self.store = replacement
+        try:
+            configure_logging(replacement.root)
+            logger.info('缓存位置已切换；迁移=%s',migrate)
+        except OSError:
+            logger.exception('切换日志文件失败，继续使用原日志文件')
         self.chat_id, self.drafts = (previous_chat_id, current_drafts) if migrate else self.cache_drafts.get(str(replacement.root.resolve()), (1, {}))
         if not any(chat['id'] == self.chat_id for chat in self.store.conversations()):
             self.chat_id = self.store.conversations()[0]['id']

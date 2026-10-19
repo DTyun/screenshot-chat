@@ -16,6 +16,7 @@ def stylesheet():
     QFrame#titleBar {{ background: {c['rail']}; }}
     QCheckBox {{ spacing: 8px; padding: 4px 0; }}
     QTextEdit {{ background: transparent; border: none; padding: 0; font-size: 14px; }}
+    QPlainTextEdit#logContent {{ background: white; border: 1px solid {c['border']}; border-radius: 6px; padding: 10px; font-family: "Consolas", "Microsoft YaHei UI"; font-size: 12px; }}
     QPushButton#addChat {{ font-size: 22px; padding: 0; }}
     QLineEdit {{ background: {c['surface']}; border: 1px solid {c['border']}; border-radius: 6px; padding: 9px; }}
     QLineEdit:focus {{ border: 1px solid {c['primary']}; }}

@@ -1,5 +1,4 @@
 """Pianyu Windows entry point. No network or accounts required."""
-import logging
 import sys
 import time
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
@@ -9,6 +8,7 @@ from src.storage import Store
 from src.theme import stylesheet
 from src.ui import MainWindow
 from src.version import APP_VERSION
+from src.app_logging import logger,configure_logging,close_logging
 
 
 def main():
@@ -34,13 +34,14 @@ def main():
         instance.close()
         return 0
     store = Store()
-    logging.basicConfig(filename=store.root / 'app.log', level=logging.ERROR)
+    configure_logging(store.root)
+    logger.info('截图聊天 %s 启动；开机启动模式=%s',APP_VERSION,'--autostart' in sys.argv)
     hotkey = GlobalHotkey(app)
     window = MainWindow(store, hotkey)
     server = QLocalServer()
     QLocalServer.removeServer(server_name)
     if not server.listen(server_name):
-        logging.error('Activation pipe unavailable: %s', server.errorString())
+        logger.error('单例激活通道不可用：%s',server.errorString())
 
     def activate():
         while server.hasPendingConnections():
@@ -52,17 +53,19 @@ def main():
     server.newConnection.connect(activate)
 
     def error_hook(kind, value, tb):
-        logging.error('Unhandled exception', exc_info=(kind, value, tb))
+        logger.error('未处理异常',exc_info=(kind,value,tb))
         window.notify('操作失败，详细信息已写入本地 app.log')
 
     sys.excepthook = error_hook
     if '--autostart' not in sys.argv or not QSystemTrayIcon.isSystemTrayAvailable():
         window.show()
     code = app.exec()
+    logger.info('应用退出')
     server.close()
     hotkey.close()
     window.store.db.close()
     instance.close()
+    close_logging()
     return code
 
 

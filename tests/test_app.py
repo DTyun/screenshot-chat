@@ -1041,3 +1041,114 @@ def test_direct_scroll_and_chat_switch_cancel_wheel_animation(app,tmp_path):
     w.tray.hide()
     w.quitting=True
     w.close()
+
+
+def test_log_reader_handles_missing_large_and_invalid_utf8(tmp_path):
+    from src.app_logging import read_log_tail
+    path=tmp_path/'app.log'
+    assert read_log_tail(path)==('',False)
+    path.write_bytes(b'x'*200+b'\n'+('中文记录\n'*8).encode('utf-8'))
+    text,truncated=read_log_tail(path,limit=80)
+    assert truncated and text.endswith('中文记录\n') and '\ufffd' not in text
+    path.write_bytes(b'broken:\xff\n')
+    assert '\ufffd' in read_log_tail(path)[0]
+
+
+def test_log_viewer_sidebar_refresh_copy_and_folder(app,tmp_path,monkeypatch):
+    from src.app_logging import close_logging,configure_logging,logger
+    from PySide6.QtGui import QDesktopServices
+    close_logging()
+    configure_logging(tmp_path)
+    logger.info('测试日志：中文内容')
+    w=MainWindow(Store(tmp_path),FakeHotkey(),FakeStartup())
+    try:
+        w.show()
+        app.processEvents()
+        QTest.mouseClick(w.log_button,Qt.LeftButton)
+        viewer=w.log_viewer
+        assert viewer.isVisible() and viewer.editor.isReadOnly()
+        assert '测试日志：中文内容' in viewer.editor.toPlainText()
+        QTest.mouseClick(viewer.copy_button,Qt.LeftButton)
+        assert app.clipboard().text()==viewer.editor.toPlainText()
+        logger.info('新增记录')
+        viewer.refresh()
+        assert '新增记录' in viewer.editor.toPlainText()
+        opened=[]
+        monkeypatch.setattr(QDesktopServices,'openUrl',lambda url: opened.append(url.toLocalFile()) or True)
+        viewer.open_folder()
+        assert Path(opened[0])==tmp_path
+        viewer.close()
+        w.show_logs()
+        assert w.log_viewer is viewer and viewer.isVisible()
+        viewer.close()
+    finally:
+        close_logging()
+        w.tray.hide()
+        w.quitting=True
+        w.close()
+
+
+def test_log_viewer_empty_and_read_error(app,tmp_path,monkeypatch):
+    from src.app_logging import close_logging
+    from src.log_viewer import LogViewer
+    close_logging()
+    w=MainWindow(Store(tmp_path),FakeHotkey(),FakeStartup())
+    viewer=LogViewer(w,lambda: tmp_path/'missing.log')
+    assert not viewer.copy_button.isEnabled() and '暂无' in viewer.status.text()
+    def failure(*args):raise PermissionError('test denied')
+    monkeypatch.setattr('src.log_viewer.read_log_tail',failure)
+    viewer.refresh()
+    assert '读取日志失败' in viewer.status.text() and not viewer.copy_button.isEnabled()
+    viewer.close()
+    w.tray.hide()
+    w.quitting=True
+    w.close()
+
+
+def test_log_file_changes_root_and_viewer_uses_new_file(app,tmp_path):
+    from src.app_logging import close_logging,configure_logging,logger,active_log_path
+    from src.log_viewer import LogViewer
+    close_logging()
+    first,second=tmp_path/'first',tmp_path/'second'
+    first.mkdir();second.mkdir()
+    configure_logging(first)
+    logger.info('旧目录记录')
+    w=MainWindow(Store(first),FakeHotkey(),FakeStartup())
+    viewer=LogViewer(w,lambda:active_log_path(w.store.root))
+    try:
+        assert '旧目录记录' in viewer.editor.toPlainText()
+        configure_logging(second)
+        logger.info('新目录记录')
+        viewer.refresh()
+        assert Path(viewer.path_field.text())==second/'app.log'
+        assert '新目录记录' in viewer.editor.toPlainText() and '旧目录记录' not in viewer.editor.toPlainText()
+        (first/'app.log').rename(first/'renamed.log')  # Old Windows file handle was released.
+    finally:
+        viewer.close()
+        close_logging()
+        w.tray.hide()
+        w.quitting=True
+        w.close()
+
+
+def test_runtime_logs_do_not_record_message_body_and_rotate(app,tmp_path):
+    from src.app_logging import close_logging,configure_logging,logger
+    from logging.handlers import RotatingFileHandler
+    close_logging()
+    configure_logging(tmp_path)
+    w=MainWindow(Store(tmp_path),FakeHotkey(),FakeStartup())
+    try:
+        w.text_editor.insertPlainText('private-message-body-do-not-log')
+        w.send()
+        text=(tmp_path/'app.log').read_text('utf-8')
+        assert '消息已保存' in text and 'private-message-body-do-not-log' not in text
+        handler=next(h for h in logger.handlers if isinstance(h,RotatingFileHandler))
+        handler.maxBytes=200
+        for i in range(60):logger.info('测试轮转记录 %s',i)
+        files=list(tmp_path.glob('app.log*'))
+        assert len(files)==3 and (tmp_path/'app.log.2').exists()
+    finally:
+        close_logging()
+        w.tray.hide()
+        w.quitting=True
+        w.close()

@@ -1,5 +1,5 @@
 APP_NAME = '截图聊天'
-APP_VERSION = '1.0.2'
+APP_VERSION = '1.0.3'
 AUTHOR = 'yumi202607'
 AUTHOR_URL = 'https://x.com/yumi202607'
 REPOSITORY_URL = 'https://github.com/DTyun/screenshot-chat'

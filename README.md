@@ -2,7 +2,7 @@
 
 微信风格的 Windows 本地截图、文字与图片记录工具。无需账号，聊天与图片保存在本机。
 
-**版本 1.0.2 · Windows 10/11 x64 · MIT**
+**版本 1.0.3 · Windows 10/11 x64 · MIT**
 
 [下载最新版本](https://github.com/DTyun/screenshot-chat/releases/latest) · [作者 X：@yumi202607](https://x.com/yumi202607) · [更新记录](CHANGELOG.md)
 
@@ -10,7 +10,7 @@
 
 ## 下载与运行
 
-在 [Releases](https://github.com/DTyun/screenshot-chat/releases/latest) 下载 `ScreenshotChat-v1.0.2-win64.zip`，解压后双击 **截图聊天.exe**，无需安装 Python。也可下载单文件 EXE；许可材料同时嵌入程序。
+在 [Releases](https://github.com/DTyun/screenshot-chat/releases/latest) 下载 `ScreenshotChat-v1.0.3-win64.zip`，解压后双击 **截图聊天.exe**，无需安装 Python。也可下载单文件 EXE；许可材料同时嵌入程序。
 
 升级前先从托盘退出旧版。历史记录默认保存在用户目录，替换程序不会删除聊天。
 
@@ -27,6 +27,7 @@
 - 托盘常驻、单实例、开机启动勾选、窗口置顶、最大化与圆角。
 - 自选缓存文件夹，默认迁移原记录，也可不迁移。
 - “关于软件”显示版本、X 账号链接和开源信息。
+- 左下侧栏“查看日志”：查看运行与错误记录、刷新、复制或打开文件夹。
 
 ## 使用
 
@@ -51,12 +52,14 @@
 | 缩略图 | `thumbnails/` |
 | 消息与聊天索引 | `history.db` |
 | 设置 | `settings.json` |
-| 错误日志 | `app.log` |
+| 运行与错误日志 | `app.log`，及轮转备份 `app.log.1`、`app.log.2` |
 | 缓存位置指针 | 默认目录下的 `location.json` |
 
 更改缓存位置时默认复制并校验记录与图片，旧目录保留备份；目标应为空。选择不迁移会使用目标已有记录或建立空库。迁移失败保留旧库。
 
 备份时先退出程序，再复制整个当前缓存目录。仓库和发行包不包含用户聊天或截图缓存。
+
+设置按钮上方的文档图标可打开内置日志窗口。日志仅供本地排错，不主动写入聊天正文或图片内容；每个日志文件最大约 2MB，保留两个备份。大文件窗口只显示最近 512KB，完整文件可通过“打开文件夹”查看。
 
 ## 源码运行与构建
 
