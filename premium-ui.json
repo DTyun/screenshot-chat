@@ -1,0 +1,14 @@
+{
+  "profile": "product-admin",
+  "sourceRoots": ["src"],
+  "locale": "zh-CN",
+  "canonicalMap": "UX-CONTRACT.md",
+  "requiredCapabilities": ["Form", "Scrollbar", "Toast", "CRUD", "Date"],
+  "ownership": {"Date": "native", "Form": "native"},
+  "requiredCommands": ["unit"],
+  "commands": {"unit": ".venv/Scripts/python.exe -m pytest -q"},
+  "evidence": {
+    "crudFullFlow": "tests/test_app.py",
+    "failurePaths": "tests/test_app.py"
+  }
+}
