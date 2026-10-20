@@ -5,7 +5,7 @@ import sqlite3
 import ctypes
 from ctypes import wintypes
 
-from PySide6.QtCore import Qt, QSize, QRect, QRectF, QPointF, QTimer, QEvent
+from PySide6.QtCore import Qt, QSize, QRect, QRectF, QPointF, QTimer, QEvent,QMimeData
 from PySide6.QtGui import QPixmap, QIcon, QImage, QPainter, QColor, QKeySequence, QShortcut, QDesktopServices, QPen, QTextDocument, QFont, QPainterPath, QRegion, QTextCursor, QAbstractTextDocumentLayout
 from PySide6.QtCore import QUrl
 from PySide6.QtWidgets import (QApplication, QMainWindow, QWidget, QFrame, QLabel, QPushButton,
@@ -19,6 +19,7 @@ from .composer import ChatEditor
 from .version import APP_NAME, APP_VERSION, AUTHOR, AUTHOR_URL, REPOSITORY_URL
 from .history import MessageHistory
 from .app_logging import logger,active_log_path,configure_logging
+from .attachments import human_size,FileSendWorker,FileSendDialog
 
 
 def asset(name):
@@ -140,10 +141,15 @@ class MessageDelegate(QStyledItemDelegate):
         scale = min(1, max(90, width-120)/m['width'], 340/m['width'], 220/m['height'])
         return QSize(max(1, round(m['width']*scale)), max(1, round(m['height']*scale)))
 
+    def attachment_size(self,message,width):
+        if message['kind']=='file':
+            return QSize(min(300,max(140,width-120)),76)
+        return self.dimensions(message,width) if message['kind']=='image' else QSize()
+
     def sizeHint(self, option, index):
         m = index.data(Qt.UserRole)
         width = self.parent().viewport().width()
-        height = self.dimensions(m, width).height() if m['kind'] == 'image' else 0
+        height = self.attachment_size(m,width).height()
         if m['text']:
             height += self.document(m['text'], width).size().height() + 20
         return QSize(option.rect.width(), round(height)+66)
@@ -161,14 +167,14 @@ class MessageDelegate(QStyledItemDelegate):
 
     def text_layout(self,message,rect):
         doc = self.document(message['text'],rect.width())
-        image_height = self.dimensions(message,rect.width()).height() if message['kind']=='image' else 0
+        image_height = self.attachment_size(message,rect.width()).height()
         bubble = QRect(rect.right()-54-24-round(doc.size().width()),rect.top()+34+image_height,
                        round(doc.size().width())+20,round(doc.size().height())+20)
         return doc,bubble
 
     def paint(self, painter, option, index):
         m = index.data(Qt.UserRole)
-        size = self.dimensions(m, option.rect.width()) if m['kind'] == 'image' else QSize()
+        size = self.attachment_size(m,option.rect.width())
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing)
         painter.setRenderHint(QPainter.SmoothPixmapTransform)
@@ -187,6 +193,21 @@ class MessageDelegate(QStyledItemDelegate):
                 painter.drawPixmap(image_rect, pix)
             else:
                 painter.drawText(image_rect, Qt.AlignCenter, '图片文件已移走')
+        if m['kind']=='file':
+            painter.setPen(QColor(COLORS['border']))
+            painter.setBrush(QColor('white'))
+            painter.drawRoundedRect(image_rect,6,6)
+            painter.setPen(QPen(QColor(COLORS['primary_hover']),1.4))
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(image_rect.x()+12,image_rect.y()+17,30,38,3,3)
+            for y in (27,35,43):
+                painter.drawLine(image_rect.x()+18,image_rect.y()+y,image_rect.x()+36,image_rect.y()+y)
+            painter.setPen(QColor(COLORS['text']))
+            font=QFont('Microsoft YaHei UI');font.setPixelSize(13)
+            painter.setFont(font)
+            painter.drawText(image_rect.adjusted(54,12,-12,-38),Qt.AlignVCenter,painter.fontMetrics().elidedText(m['original_name'],Qt.ElideMiddle,size.width()-66))
+            painter.setPen(QColor(COLORS['muted']))
+            painter.drawText(image_rect.adjusted(54,37,-12,-10),Qt.AlignVCenter,human_size(m['file_size']))
         if m['text']:
             doc,text_rect = self.text_layout(m,r)
             painter.setPen(Qt.NoPen)
@@ -207,7 +228,7 @@ class MessageDelegate(QStyledItemDelegate):
                 context.selections = [selected]
             doc.documentLayout().draw(painter,context)
             painter.restore()
-            image_rect = image_rect.united(text_rect) if m['kind']=='image' else text_rect
+            image_rect = image_rect.united(text_rect) if m['kind'] in ('image','file') else text_rect
         if option.state & QStyle.State_HasFocus:
             painter.setPen(QColor(COLORS['primary']))
             painter.setBrush(Qt.NoBrush)
@@ -216,7 +237,7 @@ class MessageDelegate(QStyledItemDelegate):
 
 
 class ConfirmDelete(QDialog):
-    def __init__(self, parent, image=True, chat=None):
+    def __init__(self, parent, image=True, chat=None, file=False):
         super().__init__(parent)
         self.setWindowTitle('删除聊天' if chat else '删除消息')
         self.setFixedWidth(370)
@@ -225,7 +246,7 @@ class ConfirmDelete(QDialog):
         layout.setSpacing(18)
         title = label('删除这个聊天？' if chat else '删除这条消息？', 'title')
         layout.addWidget(title)
-        text = label(f'将删除“{chat["name"]}”及其全部聊天记录，包括文字、图片和本地原图、缩略图，无法撤销。' if chat else '消息和本地原图将一起删除，无法撤销。' if image else '这条文字消息将被删除，无法撤销。')
+        text = label(f'将删除“{chat["name"]}”及其全部聊天记录，包括文字、图片和本地原图、缩略图、文件副本，无法撤销。' if chat else '消息和本地保存的文件副本将一起删除，不影响原文件，无法撤销。' if file else '消息和本地原图将一起删除，无法撤销。' if image else '这条文字消息将被删除，无法撤销。')
         text.setWordWrap(True)
         layout.addWidget(text)
         actions = QHBoxLayout()
@@ -458,6 +479,7 @@ class MainWindow(QMainWindow):
         self.pending = None
         self.capture_session = None
         self.capture_busy = False
+        self.sending_files = False
         self.quitting = False
         self.setWindowTitle('截图聊天')
         self.setWindowIcon(QIcon(str(asset('scissors.ico'))))
@@ -640,7 +662,9 @@ class MainWindow(QMainWindow):
         tools = QHBoxLayout()
         self.capture_button = button('✂  截图', self.capture, tip='框选屏幕区域')
         tools.addWidget(self.capture_button)
-        tools.addWidget(button('▢  粘贴图片', self.paste, tip='从剪贴板粘贴图片 Ctrl+V'))
+        tools.addWidget(button('粘贴', self.paste, tip='粘贴图片、文件或文字 Ctrl+V'))
+        self.upload_button=button('文件',self.choose_files,tip='选择要发送的文件，也可粘贴或拖入文件')
+        tools.addWidget(self.upload_button)
         self.status = label('', 'status')
         self.status.setSizePolicy(QSizePolicy.Ignored,QSizePolicy.Preferred)
         tools.addWidget(self.status, 1)
@@ -777,6 +801,7 @@ class MainWindow(QMainWindow):
         self.history.clear()
         for message in self.store.page(conversation_id=self.chat_id):
             self.add_message(message)
+        self.history.doItemsLayout()
         self.refresh_count()
         self.history.scrollToBottom()
 
@@ -825,7 +850,8 @@ class MainWindow(QMainWindow):
     def add_message(self, message, index=None):
         item = QListWidgetItem()
         item.setData(Qt.UserRole, message)
-        item.setText((message['text'] or '图片') + ' ' + message['created'])
+        item.setText((message['original_name'] or message['text'] or '图片') + ' ' + message['created'])
+        if message['kind']=='file':item.setToolTip(message['original_name']+' · '+human_size(message['file_size'])+'\n双击打开文件')
         if index is None:
             self.history.addItem(item)
         else:
@@ -846,6 +872,11 @@ class MainWindow(QMainWindow):
         self.refresh_count()
 
     def paste(self):
+        mime=QApplication.clipboard().mimeData()
+        if mime and any(url.isLocalFile() for url in mime.urls()):
+            self.text_editor.insertFromMimeData(mime)
+            self.update_send_state()
+            return
         image = QApplication.clipboard().image()
         if image.isNull():
             text = QApplication.clipboard().text()
@@ -860,7 +891,14 @@ class MainWindow(QMainWindow):
         images = self.text_editor.images()
         self.pending = images[0] if images else None
         self.discard_button.setVisible(bool(images))
-        self.send_button.setEnabled(self.pending is not None or bool(self.text_editor.toPlainText().strip()))
+        self.send_button.setEnabled(self.pending is not None or bool(self.text_editor.files()) or bool(self.text_editor.toPlainText().strip()))
+
+    def choose_files(self):
+        paths,_=QFileDialog.getOpenFileNames(self,'选择要发送的文件','','所有文件 (*)')
+        if paths:
+            self.text_editor.insert_files(paths)
+            self.update_send_state()
+            self.text_editor.setFocus()
 
     def set_pending(self, image):
         self.text_editor.insert_image(image)
@@ -875,12 +913,12 @@ class MainWindow(QMainWindow):
 
     def send(self):
         text = self.text_editor.toPlainText()
-        if (self.pending is None and not text.strip()) or self.capture_busy or self.capture_session or self.text_editor.composing:
+        if (self.pending is None and not self.text_editor.files() and not text.strip()) or self.capture_busy or self.capture_session or self.text_editor.composing or self.sending_files:
             return
         self.send_button.setEnabled(False)
         try:
             images = self.text_editor.images()
-            if len(images) > 1:
+            if len(images) > 1 or self.text_editor.files():
                 parts = []
                 buffer = ''
                 for kind,value in self.text_editor.elements():
@@ -893,7 +931,20 @@ class MainWindow(QMainWindow):
                         parts.append((value,''))
                 if buffer.strip():
                     parts.append((None,buffer))
-                self.store.save_composed(parts,self.chat_id)
+                if self.text_editor.files():
+                    self.sending_files=True
+                    worker=FileSendWorker(self.store.root,parts,self.chat_id,self)
+                    dialog=FileSendDialog(worker,self)
+                    try:
+                        worker.start()
+                        dialog.exec()
+                        worker.wait()
+                        if worker.error:raise OSError(worker.error)
+                    finally:
+                        self.sending_files=False
+                        worker.deleteLater()
+                        dialog.deleteLater()
+                else:self.store.save_composed(parts,self.chat_id)
             elif self.pending is not None:
                 message = self.store.save(self.pending, text, self.chat_id)
             else:
@@ -903,7 +954,7 @@ class MainWindow(QMainWindow):
             self.notify('发送失败：' + str(exc))
             self.send_button.setEnabled(True)
             return
-        logger.info('消息已保存；聊天编号=%s；图片数=%s',self.chat_id,len(self.text_editor.images()))
+        logger.info('消息已保存；聊天编号=%s；图片数=%s；文件数=%s',self.chat_id,len(self.text_editor.images()),len(self.text_editor.files()))
         self.text_editor.reset()
         self.update_send_state()
         self.reload_latest()
@@ -964,7 +1015,10 @@ class MainWindow(QMainWindow):
         selected = self.history.selected_text(item)
         if selected:
             menu.addAction('复制所选文字',lambda: QApplication.clipboard().setText(selected))
-        if message['kind']=='image':
+        if message['kind']=='file':
+            menu.addAction('打开文件',lambda:self.open_image(item))
+            menu.addAction('复制文件',lambda:self.copy_file(item))
+        elif message['kind']=='image':
             menu.addAction('复制图片',lambda: self.copy_image(item))
         else:
             menu.addAction('复制全文' if selected else '复制文字',lambda: QApplication.clipboard().setText(message['text']))
@@ -985,7 +1039,19 @@ class MainWindow(QMainWindow):
             QApplication.clipboard().setText(item.data(Qt.UserRole)['text'])
             self.notify('文字已复制')
             return
+        if item.data(Qt.UserRole)['kind']=='file':
+            self.copy_file(item)
+            return
         self.copy_image(item)
+
+    def copy_file(self,item):
+        path=self.store.file_path(item.data(Qt.UserRole)['filename'])
+        if not path.is_file():
+            self.notify('文件已被移动或删除')
+            return
+        mime=QMimeData();mime.setUrls([QUrl.fromLocalFile(str(path.resolve()))])
+        QApplication.clipboard().setMimeData(mime)
+        self.notify('文件已复制，可粘贴到文件夹或其他程序')
 
     def copy_image(self,item):
         image = QImage(str(self.store.images / item.data(Qt.UserRole)['filename']))
@@ -996,7 +1062,7 @@ class MainWindow(QMainWindow):
         self.notify('图片已复制，可以粘贴到其他对话框')
 
     def delete(self, item):
-        if not item or ConfirmDelete(self, image=item.data(Qt.UserRole)['kind']=='image').exec() != QDialog.Accepted:
+        if not item or ConfirmDelete(self, image=item.data(Qt.UserRole)['kind']=='image',file=item.data(Qt.UserRole)['kind']=='file').exec() != QDialog.Accepted:
             return
         try:
             self.store.delete(item.data(Qt.UserRole))
@@ -1008,6 +1074,13 @@ class MainWindow(QMainWindow):
             self.notify('删除失败：' + str(exc))
 
     def open_image(self, item):
+        if item.data(Qt.UserRole)['kind']=='file':
+            path=self.store.file_path(item.data(Qt.UserRole)['filename'])
+            if not path.is_file():
+                self.notify('文件已被移动或删除')
+            elif not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path.resolve()))):
+                self.notify('无法打开文件，请检查是否安装对应程序')
+            return
         if item.data(Qt.UserRole)['kind'] != 'image':
             self.copy(item)
             return
@@ -1144,6 +1217,9 @@ class MainWindow(QMainWindow):
         super().changeEvent(event)
 
     def closeEvent(self, event):
+        if self.sending_files:
+            event.ignore()
+            return
         if self.quitting:
             event.accept()
         elif QSystemTrayIcon.isSystemTrayAvailable():
@@ -1154,6 +1230,9 @@ class MainWindow(QMainWindow):
             event.accept()
 
     def quit_app(self):
+        if self.sending_files:
+            self.notify('正在保存文件，请稍候再退出')
+            return
         if getattr(self, 'relocating', False):
             self.notify('正在切换缓存文件夹，请等待完成后退出')
             return

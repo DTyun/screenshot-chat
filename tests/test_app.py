@@ -19,6 +19,8 @@ def app():
     a.setStyle('Fusion')
     a.setStyleSheet(stylesheet())
     yield a
+    a.clipboard().clear()  # Release offscreen platform MIME ownership before Qt teardown.
+    a.processEvents()
 
 
 @pytest.fixture

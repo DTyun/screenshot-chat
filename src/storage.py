@@ -5,6 +5,7 @@ import json
 import os
 import sqlite3
 import uuid
+import shutil
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QImage
@@ -29,8 +30,10 @@ class Store:
         self.root = Path(root) if root else default_root()
         self.images = self.root / 'images'
         self.thumbs = self.root / 'thumbnails'
+        self.files = self.root / 'files'
         self.images.mkdir(parents=True, exist_ok=True)
         self.thumbs.mkdir(exist_ok=True)
+        self.files.mkdir(exist_ok=True)
         self.db = sqlite3.connect(self.root / 'history.db')
         self.db.row_factory = sqlite3.Row
         self.db.execute('PRAGMA journal_mode=WAL')
@@ -52,14 +55,24 @@ class Store:
                 self.db.execute("INSERT INTO conversations(name) VALUES('我的图片')")
             if 'conversation_id' not in columns:
                 self.db.execute('ALTER TABLE messages ADD COLUMN conversation_id INTEGER NOT NULL DEFAULT 1')
+            if 'original_name' not in columns:
+                self.db.execute("ALTER TABLE messages ADD COLUMN original_name TEXT NOT NULL DEFAULT ''")
+            if 'file_size' not in columns:
+                self.db.execute('ALTER TABLE messages ADD COLUMN file_size INTEGER NOT NULL DEFAULT 0')
             self.db.execute('CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id,id)')
         self.recover_deletions()
 
     def recover_deletions(self):
-        for folder in (self.images, self.thumbs):
-            for temp in folder.glob('*.deleting'):
-                original = temp.with_suffix('.png')
-                exists = self.db.execute('SELECT 1 FROM messages WHERE filename=?', (original.name,)).fetchone()
+        for folder in (self.images, self.thumbs,self.files):
+            for temp in folder.rglob('*.deleting'):
+                relative = temp.relative_to(folder).as_posix()
+                if folder==self.files and self.db.execute("SELECT 1 FROM messages WHERE kind='file' AND filename=?",(relative,)).fetchone():
+                    continue
+                original = temp.with_name(temp.name[:-len('.deleting')])
+                exists = self.db.execute('SELECT 1 FROM messages WHERE filename=?', (original.relative_to(folder).as_posix(),)).fetchone()
+                if not exists and folder!=self.files:
+                    original = temp.with_suffix('.png')  # Earlier versions' staged image names.
+                    exists = self.db.execute('SELECT 1 FROM messages WHERE filename=?',(original.name,)).fetchone()
                 if exists and not original.exists():
                     temp.rename(original)
                 else:
@@ -75,8 +88,20 @@ class Store:
             with self.db:
                 for image,text in parts:
                     filename, width, height = None, 0, 0
+                    original_name,file_size = '',0
                     kind = 'text'
-                    if image is not None:
+                    if isinstance(image,Path):
+                        source = image.resolve(strict=True)
+                        if not source.is_file():
+                            raise ValueError('只能发送文件，不能发送文件夹')
+                        original_name = source.name
+                        filename = uuid.uuid4().hex+'/'+original_name
+                        target = self.file_path(filename)
+                        files.append(target)
+                        target.parent.mkdir(parents=True)
+                        shutil.copyfile(source,target)
+                        file_size,kind = target.stat().st_size,'file'
+                    elif image is not None:
                         if image.isNull():
                             raise ValueError('图片为空，无法发送')
                         filename = datetime.now().strftime('%Y%m%d_%H%M%S_') + uuid.uuid4().hex[:10] + '.png'
@@ -90,13 +115,25 @@ class Store:
                         width,height,kind = image.width(),image.height(),'image'
                     elif not text.strip():
                         raise ValueError('请输入文字再发送')
-                    cur = self.db.execute('INSERT INTO messages(filename,created,width,height,text,conversation_id,kind) VALUES(?,?,?,?,?,?,?)', (filename,datetime.now().isoformat(timespec='seconds'),width,height,text,conversation_id,kind))
+                    cur = self.db.execute('INSERT INTO messages(filename,created,width,height,text,conversation_id,kind,original_name,file_size) VALUES(?,?,?,?,?,?,?,?,?)', (filename,datetime.now().isoformat(timespec='seconds'),width,height,text,conversation_id,kind,original_name,file_size))
                     records.append(dict(self.db.execute('SELECT * FROM messages WHERE id=?',(cur.lastrowid,)).fetchone()))
             return records
         except Exception:
             for path in files:
                 path.unlink(missing_ok=True)
+                if path.parent.parent==self.files:
+                    try:path.parent.rmdir()
+                    except OSError:pass
             raise
+
+    def file_path(self,filename):
+        path = self.files/filename
+        if not path.resolve().is_relative_to(self.files.resolve()):
+            raise ValueError('文件路径无效')
+        return path
+
+    def save_file(self,path,text='',conversation_id=1):
+        return self.save_composed([(Path(path),text)],conversation_id)[0]
 
     def save_text(self, text, conversation_id=1):
         if not text.strip():
@@ -108,9 +145,9 @@ class Store:
     def search(self, keyword='', kind=None, before=None, limit=40, conversation_id=1):
         escaped = keyword.strip().replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
         pattern = '%' + escaped + '%'
-        where = ["(text LIKE ? ESCAPE '\\' OR created LIKE ? ESCAPE '\\' OR COALESCE(filename,'') LIKE ? ESCAPE '\\')"]
+        where = ["(text LIKE ? ESCAPE '\\' OR created LIKE ? ESCAPE '\\' OR COALESCE(filename,'') LIKE ? ESCAPE '\\' OR original_name LIKE ? ESCAPE '\\')"]
         where.append('conversation_id=?')
-        args = [pattern, pattern, pattern, conversation_id]
+        args = [pattern, pattern, pattern, pattern, conversation_id]
         if kind:
             where.append('kind=?')
             args.append(kind)
@@ -178,12 +215,12 @@ class Store:
         staged = []
         try:
             for message in messages:
-                for folder in (self.images, self.thumbs):
+                for folder in ((self.files,) if message['kind']=='file' else (self.images,self.thumbs)):
                     if not message['filename']:
                         continue
-                    path = folder / message['filename']
+                    path = self.file_path(message['filename']) if message['kind']=='file' else folder / message['filename']
                     if path.exists():
-                        temp = path.with_suffix('.deleting')
+                        temp = path.with_name(path.name+'.deleting')
                         path.rename(temp)
                         staged.append((path, temp))
             with self.db:
@@ -199,6 +236,8 @@ class Store:
         for _, temp in staged:
             try:
                 temp.unlink()
+                if temp.parent.parent==self.files:
+                    temp.parent.rmdir()
             except OSError:
                 pass  # Unreferenced cleanup can be retried without losing history.
 

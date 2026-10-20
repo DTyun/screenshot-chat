@@ -37,7 +37,7 @@ def prepare_destination(source, destination, migrate):
     staged = target.parent / ('.screenshot-chat-move-' + uuid.uuid4().hex)
     staged.mkdir()
     try:
-        for name in ('images', 'thumbnails'):
+        for name in ('images', 'thumbnails','files'):
             if (source / name).exists():
                 shutil.copytree(source / name, staged / name)
         if (source / 'settings.json').exists():
@@ -50,10 +50,11 @@ def prepare_destination(source, destination, migrate):
         try:
             if check.db.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
                 raise OSError('聊天记录校验失败')
-            for row in check.db.execute("SELECT filename FROM messages WHERE kind='image'"):
+            for row in check.db.execute("SELECT filename,kind FROM messages WHERE kind IN ('image','file')"):
                 name = row['filename']
-                if (source / 'images' / name).exists() and not (staged / 'images' / name).exists():
-                    raise OSError('图片迁移校验失败：' + name)
+                folder = 'files' if row['kind']=='file' else 'images'
+                if (source / folder / name).exists() and not (staged / folder / name).exists():
+                    raise OSError('附件迁移校验失败：' + name)
         finally:
             check.db.close()
         if target.exists():

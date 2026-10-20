@@ -22,7 +22,7 @@ class SearchDialog(QDialog):
         self.query.setClearButtonEnabled(True)
         layout.addWidget(self.query)
         self.tabs = QTabBar()
-        for title in ('全部', '文字', '图片'):
+        for title in ('全部', '文字', '图片','文件'):
             self.tabs.addTab(title)
         self.tabs.setExpanding(False)
         layout.addWidget(self.tabs)
@@ -62,7 +62,7 @@ class SearchDialog(QDialog):
         try:
             last = self.results.item(self.results.count()-1)
             before = last.data(Qt.UserRole)['id'] if last else None
-            kind = (None, 'text', 'image')[self.tabs.currentIndex()]
+            kind = (None, 'text', 'image','file')[self.tabs.currentIndex()]
             messages = self.window.store.search(self.query.text(), kind, before, limit=41, conversation_id=self.window.chat_id)
             self.more.setVisible(len(messages) > 40)
             self.more.setEnabled(True)
@@ -76,7 +76,7 @@ class SearchDialog(QDialog):
     def add_result(self, message):
         item = QListWidgetItem()
         item.setData(Qt.UserRole, message)
-        item.setData(Qt.AccessibleTextRole, message['text'] or '图片')
+        item.setData(Qt.AccessibleTextRole, message['original_name'] or message['text'] or '图片')
         panel = QWidget()
         body = QVBoxLayout(panel)
         body.setContentsMargins(4,10,4,12)
@@ -97,6 +97,12 @@ class SearchDialog(QDialog):
             else:
                 preview.setPixmap(pix.scaled(180,110,Qt.KeepAspectRatio,Qt.SmoothTransformation))
             body.addWidget(preview)
+        if message['kind']=='file':
+            from .attachments import human_size
+            filename=QLabel(message['original_name']+' · '+human_size(message['file_size']))
+            filename.setTextFormat(Qt.PlainText)
+            filename.setWordWrap(True)
+            body.addWidget(filename)
         if message['text']:
             text = QLabel(message['text'][:400] + ('…' if len(message['text']) > 400 else ''))
             text.setTextFormat(Qt.PlainText)
