@@ -343,7 +343,7 @@ class TitleBar(QFrame):
 
 
 class AboutDialog(QDialog):
-    def __init__(self,parent):
+    def __init__(self,parent,check_updates):
         super().__init__(parent)
         self.setWindowTitle('关于软件')
         self.setFixedWidth(400)
@@ -372,7 +372,7 @@ class AboutDialog(QDialog):
         license_info = label('项目代码：MIT License\n使用 Qt / PySide6（LGPLv3），详见随附许可。','muted')
         license_info.setAlignment(Qt.AlignCenter)
         layout.addWidget(license_info)
-        layout.addWidget(button('检查更新',lambda: parent.check_updates(self)),alignment=Qt.AlignHCenter)
+        layout.addWidget(button('检查更新',lambda: check_updates(self)),alignment=Qt.AlignHCenter)
         layout.addWidget(button('关闭',self.accept),alignment=Qt.AlignHCenter)
 
 
@@ -420,7 +420,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(hint)
         layout.addWidget(button('打开图片文件夹', lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(window.store.images)))))
         row = QHBoxLayout()
-        row.addWidget(button('关于软件',lambda: AboutDialog(self).exec()))
+        row.addWidget(button('关于软件',lambda: AboutDialog(self,window.check_updates).exec()))
         row.addStretch()
         row.addWidget(button('取消', self.reject))
         row.addWidget(button('保存', self.save, 'primary'))
@@ -711,7 +711,7 @@ class MainWindow(QMainWindow):
         self.capture_button.setToolTip('框选截图 · ' + self.hotkey_text)
 
     def about(self):
-        AboutDialog(self).exec()
+        AboutDialog(self,self.check_updates).exec()
 
     def check_updates(self, parent=None):
         self.pending_update = None

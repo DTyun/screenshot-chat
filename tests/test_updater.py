@@ -3,10 +3,11 @@ import pytest
 from PySide6.QtCore import QObject, Signal, QByteArray
 from PySide6.QtNetwork import QNetworkReply
 from PySide6.QtGui import QDesktopServices
+from PySide6.QtWidgets import QPushButton
 from tests.test_app import app, FakeHotkey, FakeStartup
 from src.updater import UpdateChecker, parse_release, version_tuple, MAX_RESPONSE, API_URL
 from src.storage import Store
-from src.ui import MainWindow, AboutDialog
+from src.ui import MainWindow, AboutDialog, SettingsDialog
 
 
 def payload(tag='v1.3.0', **changes):
@@ -104,16 +105,27 @@ def test_bounded_response_and_cancel(app):
         assert checker.reply is None and not checker.deadline.isActive()
 
 
-def test_manual_check_about_download_and_retry(app,tmp_path,monkeypatch):
+@pytest.mark.parametrize('entry', ['settings', 'tray'])
+def test_manual_check_about_download_and_retry(app,tmp_path,monkeypatch,entry):
     w=MainWindow(Store(tmp_path),FakeHotkey(),FakeStartup())
     manager=Manager()
     w.update_checker.deleteLater()
     w.update_checker=UpdateChecker(w,manager)
     w.update_checker.finished.connect(w.update_checked)
-    about=AboutDialog(w)
+    shown=[]
+    monkeypatch.setattr(AboutDialog,'exec',lambda dialog: shown.append(dialog) or 0)
+    settings=None
+    if entry=='settings':
+        settings=SettingsDialog(w)
+        next(b for b in settings.findChildren(QPushButton) if b.text()=='关于软件').click()
+    else:
+        w.about()
+    assert len(shown)==1
+    about=shown[0]
+    assert about.parent() is (settings if settings else w)
     opened=[]
     monkeypatch.setattr(QDesktopServices,'openUrl',lambda url: opened.append(url.toString()) or True)
-    w.check_updates(about)
+    next(b for b in about.findChildren(QPushButton) if b.text()=='检查更新').click()
     dialog=w.update_dialog
     assert dialog.parent() is about and not dialog.action.isEnabled()
     manager.reply.data=json.dumps(payload()).encode()
@@ -124,6 +136,9 @@ def test_manual_check_about_download_and_retry(app,tmp_path,monkeypatch):
     assert w.store.count()==0 and w.pending_update is None
     dialog.reject(); app.processEvents()
     assert w.update_dialog is None
+    about.close()
+    if settings:
+        settings.close()
     w.tray.hide(); w.quitting=True; w.close()
 
 
