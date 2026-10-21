@@ -1,6 +1,7 @@
-"""Pianyu Windows entry point. No network or accounts required."""
+"""Local chat entry point. Public release checks are optional to core operation."""
 import sys
 import time
+from PySide6.QtCore import QTimer
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QSystemTrayIcon
 from src.platform_win import SingleInstance, GlobalHotkey
@@ -59,6 +60,7 @@ def main():
     sys.excepthook = error_hook
     if '--autostart' not in sys.argv or not QSystemTrayIcon.isSystemTrayAvailable():
         window.show()
+    QTimer.singleShot(5000, window.update_checker.check)
     code = app.exec()
     logger.info('应用退出')
     server.close()

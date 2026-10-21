@@ -20,6 +20,7 @@ from .version import APP_NAME, APP_VERSION, AUTHOR, AUTHOR_URL, REPOSITORY_URL
 from .history import MessageHistory
 from .app_logging import logger,active_log_path,configure_logging
 from .attachments import human_size,FileSendWorker,FileSendDialog
+from .updater import UpdateChecker, UpdateDialog
 
 
 def asset(name):
@@ -371,6 +372,7 @@ class AboutDialog(QDialog):
         license_info = label('项目代码：MIT License\n使用 Qt / PySide6（LGPLv3），详见随附许可。','muted')
         license_info.setAlignment(Qt.AlignCenter)
         layout.addWidget(license_info)
+        layout.addWidget(button('检查更新',lambda: parent.check_updates(self)),alignment=Qt.AlignHCenter)
         layout.addWidget(button('关闭',self.accept),alignment=Qt.AlignHCenter)
 
 
@@ -481,6 +483,14 @@ class MainWindow(QMainWindow):
         self.capture_busy = False
         self.sending_files = False
         self.quitting = False
+        self.update_checker = UpdateChecker(self)
+        self.update_checker.finished.connect(self.update_checked)
+        self.update_dialog = None
+        self.pending_update = None
+        self.manual_update_check = False
+        self.update_timer = QTimer(self)
+        self.update_timer.setInterval(1000)
+        self.update_timer.timeout.connect(self.present_update)
         self.setWindowTitle('截图聊天')
         self.setWindowIcon(QIcon(str(asset('scissors.ico'))))
         self.setWindowFlag(Qt.FramelessWindowHint)
@@ -499,6 +509,7 @@ class MainWindow(QMainWindow):
         self.tray.setContextMenu(menu)
         self.tray.activated.connect(lambda reason: self.restore() if reason in (QSystemTrayIcon.Trigger, QSystemTrayIcon.DoubleClick) else None)
         self.tray.show()
+        self.tray.messageClicked.connect(self.open_pending_update)
         self.hotkey.events.triggered.connect(self.capture)
         try:
             self.hotkey.set(self.hotkey_text)
@@ -701,6 +712,61 @@ class MainWindow(QMainWindow):
 
     def about(self):
         AboutDialog(self).exec()
+
+    def check_updates(self, parent=None):
+        self.pending_update = None
+        self.update_timer.stop()
+        self.show_update_dialog(parent or self)
+        self.manual_update_check = True
+        self.update_dialog.set_busy(True)
+        self.update_checker.check()
+
+    def show_update_dialog(self, parent):
+        if self.update_dialog is None:
+            dialog = UpdateDialog(self.update_checker,parent)
+            self.update_dialog = dialog
+            dialog.finished.connect(lambda: self.close_update_dialog(dialog))
+            dialog.open()
+        else:
+            self.update_dialog.raise_()
+            self.update_dialog.activateWindow()
+
+    def close_update_dialog(self, dialog):
+        if self.update_dialog is dialog:
+            self.update_dialog = None
+        dialog.deleteLater()
+
+    def update_checked(self, release, error):
+        manual = self.manual_update_check
+        self.manual_update_check = False
+        if self.quitting:
+            return
+        if error:
+            logger.info('检查更新未完成：%s',error)
+        if release and not manual and self.update_dialog is None:
+            self.pending_update = release
+            self.update_timer.start()
+            if not self.isVisible() or self.isMinimized():
+                self.tray.showMessage('截图聊天有新版本', '发现 '+release.version+'，点击查看并下载更新。')
+
+    def open_pending_update(self):
+        if self.pending_update:
+            self.restore()
+            self.present_update()
+
+    def present_update(self):
+        if self.quitting or not self.pending_update:
+            self.update_timer.stop()
+            return
+        if (not self.isVisible() or self.isMinimized() or not self.isActiveWindow() or
+            self.capture_busy or self.capture_session or self.sending_files or
+            getattr(self,'relocating',False) or QApplication.activeModalWidget()):
+            return
+        release = self.pending_update
+        self.pending_update = None
+        self.update_timer.stop()
+        self.show_update_dialog(self)
+        self.update_dialog.show_result(release)
 
     def show_logs(self):
         from .log_viewer import LogViewer
@@ -1237,6 +1303,8 @@ class MainWindow(QMainWindow):
             self.notify('正在切换缓存文件夹，请等待完成后退出')
             return
         self.quitting = True
+        self.update_timer.stop()
+        self.update_checker.cancel()
         self.tray.hide()
         self.hotkey.close()
         QApplication.quit()
